@@ -1,0 +1,26 @@
+### Health
+GET http://localhost:8081/health
+
+### Notion ping
+GET http://localhost:8081/debug/notion
+
+### Search databases (we used this earlier)
+GET http://localhost:8081/debug/notion/search
+
+### Create a test application
+POST http://localhost:8081/apply
+Content-Type: application/json
+
+{
+  "external_id": "linkedin-spotify-123",
+  "position": "Data Analyst Intern",
+  "company": "Spotify",
+  "location": "Remote",
+  "url": "https://www.linkedin.com/jobs/view/123456",
+  "work_mode": "Remote",
+  "salary": "$20–$25/hour",
+  "notes": "Applied via Easy Apply on LinkedIn.",
+  "stage": "Applied",
+  "outcome": "Active",
+  "next_interview": ""
+}
