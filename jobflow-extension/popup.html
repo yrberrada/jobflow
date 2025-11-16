@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <title>JobFlow</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: #0f172a;
+            color: #e5e7eb;
+            min-width: 260px;
+        }
+
+        .wrapper {
+            padding: 14px 16px 16px;
+        }
+
+        h1 {
+            font-size: 16px;
+            margin: 0 0 4px;
+        }
+
+        .subtitle {
+            font-size: 12px;
+            color: #9ca3af;
+            margin: 0 0 10px;
+        }
+
+        button#send-job {
+            width: 100%;
+            border: none;
+            border-radius: 999px;
+            padding: 8px 12px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            background: #22c55e;
+            color: #022c22;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+
+        button#send-job:hover {
+            background: #16a34a;
+        }
+
+        button#send-job:active {
+            transform: translateY(1px);
+        }
+
+        #status {
+            margin-top: 8px;
+            font-size: 11px;
+            color: #9ca3af;
+            min-height: 14px;
+            white-space: pre-line;
+        }
+    </style>
+</head>
+<body>
+<div class="wrapper">
+    <h1>JobFlow</h1>
+    <p class="subtitle">
+        Send this LinkedIn job to your Notion “Job Tracker (beta)” database.
+    </p>
+
+    <button id="send-job">
+        🚀 Send current job to JobFlow
+    </button>
+
+    <p id="status">Idle</p>
+</div>
+
+<script src="popup.js"></script>
+</body>
+</html>

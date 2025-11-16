@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "JobFlow – LinkedIn Bridge",
+  "version": "0.1.0",
+  "description": "Send LinkedIn job postings to the local JobFlow API.",
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "http://localhost:8081/*"
+  ],
+  "action": {
+    "default_title": "Send job to JobFlow",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/jobs/*"],
+      "js": ["content-script.js"]
+    }
+  ]
+}

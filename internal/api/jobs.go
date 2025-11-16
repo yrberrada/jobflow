@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"jobflow.local/internal/ai"
 	"jobflow.local/internal/domain"
 )
 
@@ -19,22 +20,18 @@ type applyRequest struct {
 	URL           string  `json:"url"`
 	WorkMode      string  `json:"work_mode"`
 	Salary        string  `json:"salary"`
+	Description   string  `json:"description"` // full job description
 	Notes         string  `json:"notes"`
 	Stage         string  `json:"stage"`
 	Outcome       string  `json:"outcome"`
 	NextInterview *string `json:"next_interview"` // ISO8601 (RFC3339), optional
 }
 
-// handleApply is the main entry point for recording an application.
-// 1) Upsert Job + Application in SQLite
-// 2) Create a row in Notion
-// 3) Save the Notion page id back into the DB (best effort)
 func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
 	defer r.Body.Close()
 
 	var req applyRequest
@@ -43,44 +40,60 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-
 	log.Printf("[/apply] incoming payload: %+v", req)
 
-	// Map request -> domain.Job
+	// --- 1) Build job & application domain models --------------------------
+
 	job := domain.Job{
-		ExternalID: req.ExternalID,
-		Title:      req.Position,
-		Company:    req.Company,
-		Location:   req.Location,
-		URL:        req.URL,
-		WorkMode:   req.WorkMode,
-		Salary:     req.Salary,
+		ExternalID:  req.ExternalID,
+		Title:       req.Position,
+		Company:     req.Company,
+		Location:    req.Location,
+		URL:         req.URL,
+		WorkMode:    req.WorkMode,
+		Salary:      req.Salary,
+		Description: req.Description,
 	}
 
-	// Parse next interview (optional)
 	var interviewTime *time.Time
 	if req.NextInterview != nil && *req.NextInterview != "" {
 		t, err := time.Parse(time.RFC3339, *req.NextInterview)
 		if err != nil {
-			log.Printf("[/apply] bad next_interview format (expected RFC3339) %q: %v", *req.NextInterview, err)
+			log.Printf("[/apply] bad next_interview format %q: %v", *req.NextInterview, err)
 			http.Error(w, "invalid next_interview datetime (expected RFC3339)", http.StatusBadRequest)
 			return
 		}
 		interviewTime = &t
 	}
 
-	// Map request -> domain.Application
 	app := domain.Application{
 		Stage:         req.Stage,
 		Outcome:       req.Outcome,
-		Notes:         req.Notes,
+		Notes:         req.Notes, // will be enriched below
 		InterviewTime: interviewTime,
 	}
 
+	// --- 2) AI enrichment (best effort) -----------------------------------
+
+	if req.Description != "" {
+		// No ctx here, since EnrichJobWithLLM currently doesn't take one.
+		aiText, err := ai.EnrichJobWithLLM(req.Description, req.Position, req.Company)
+		if err != nil {
+			log.Printf("[/apply] AI enrichment failed: %v", err)
+		} else {
+			if app.Notes != "" {
+				app.Notes += "\n\n"
+			}
+			app.Notes += "=== AI Summary & Talking Points ===\n" + aiText
+		}
+	}
+
+	// This ctx is the one we actually use for DB + Notion calls.
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	// 1) Upsert locally (job + application)
+	// --- 3) Upsert in SQLite ----------------------------------------------
+
 	if err := s.store.UpsertJobAndApplication(ctx, &job, &app); err != nil {
 		log.Printf("[/apply] DB error in UpsertJobAndApplication: %v", err)
 		http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
@@ -88,7 +101,8 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[/apply] DB upsert ok: job_id=%d application_id=%d", job.ID, app.ID)
 
-	// 2) Create row in Notion
+	// --- 4) Create row in Notion ------------------------------------------
+
 	pageID, err := s.notion.CreateJobPage(ctx, job, app)
 	if err != nil {
 		log.Printf("[/apply] Notion error in CreateJobPage: %v", err)
@@ -97,12 +111,11 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[/apply] Notion page created: %s", pageID)
 
-	// 3) Save Notion page id back into DB (best-effort; if it fails we log but still return 201)
+	// Save Notion page id (best-effort)
 	if err := s.store.SaveNotionPageID(ctx, app.ID, pageID); err != nil {
 		log.Printf("[/apply] warning: SaveNotionPageID failed: %v", err)
 	}
 
-	// Success response
 	resp := map[string]any{
 		"ok":             true,
 		"job_id":         job.ID,

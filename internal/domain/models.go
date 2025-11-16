@@ -3,16 +3,19 @@ package domain
 import "time"
 
 type Job struct {
-	ID          int64
-	ExternalID  string
-	Title       string
-	Company     string
-	Location    string
-	URL         string
-	WorkMode    string
-	Salary      string
+	ID         int64
+	ExternalID string
+	Title      string
+	Company    string
+	Location   string
+	URL        string
+	WorkMode   string
+	Salary     string
+
+	// NEW
 	Description string
-	CreatedAt   time.Time
+
+	CreatedAt time.Time
 }
 
 type Application struct {
@@ -20,8 +23,8 @@ type Application struct {
 	JobID         int64
 	Stage         string
 	Outcome       string
+	Notes         string
 	AppliedOn     *time.Time
 	InterviewTime *time.Time
-	Notes         string
-	NotionPageID  string
+	NotionPageID  *string
 }
