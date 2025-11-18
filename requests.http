@@ -18,3 +18,8 @@ Content-Type: application/json
 
   "description": "We are looking for a Data Analyst Intern with experience in Python, SQL, and data visualization. You will work with large datasets, build dashboards, and support machine learning experiments with the team."
 }
+### Search databases (we used this earlier)
+GET http://localhost:8081/debug/notion/search
+
+### Notion ping
+GET http://localhost:8081/debug/notion

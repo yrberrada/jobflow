@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"jobflow.local/internal/ai"
@@ -27,6 +28,10 @@ type applyRequest struct {
 	NextInterview *string `json:"next_interview"` // ISO8601 (RFC3339), optional
 }
 
+// handleApply is the main entry point for recording an application.
+// 1) Upsert Job + Application in SQLite
+// 2) Create a row in Notion
+// 3) Save the Notion page id back into the DB (best effort)
 func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -74,25 +79,25 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// --- 2) AI enrichment (best effort) -----------------------------------
-
-	if req.Description != "" {
-		// No ctx here, since EnrichJobWithLLM currently doesn't take one.
-		aiText, err := ai.EnrichJobWithLLM(req.Description, req.Position, req.Company)
+	// We call the LLM only if we have a non-empty description & position.
+	if req.Description != "" && req.Position != "" {
+		enriched, err := ai.EnrichJobWithLLM(req.Description, req.Position, req.Company)
 		if err != nil {
 			log.Printf("[/apply] AI enrichment failed: %v", err)
 		} else {
-			if app.Notes != "" {
-				app.Notes += "\n\n"
+			base := app.Notes
+			if strings.TrimSpace(base) == "" {
+				base = "Captured from LinkedIn"
 			}
-			app.Notes += "=== AI Summary & Talking Points ===\n" + aiText
+
+			app.Notes = base + "\n\n=== AI Summary & Talking Points ===\n" + enriched
 		}
 	}
 
-	// This ctx is the one we actually use for DB + Notion calls.
+	// --- 3) Upsert in SQLite ----------------------------------------------
+
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-
-	// --- 3) Upsert in SQLite ----------------------------------------------
 
 	if err := s.store.UpsertJobAndApplication(ctx, &job, &app); err != nil {
 		log.Printf("[/apply] DB error in UpsertJobAndApplication: %v", err)
