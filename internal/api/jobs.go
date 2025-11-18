@@ -1,3 +1,4 @@
+// internal/api/jobs.go
 package api
 
 import (
@@ -30,8 +31,9 @@ type applyRequest struct {
 
 // handleApply is the main entry point for recording an application.
 // 1) Upsert Job + Application in SQLite
-// 2) Create a row in Notion
-// 3) Save the Notion page id back into the DB (best effort)
+// 2) Optionally call the LLM to enrich the notes
+// 3) Create a row in Notion (best effort)
+// 4) Save the Notion page id back into the DB (best effort)
 func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -74,30 +76,49 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 	app := domain.Application{
 		Stage:         req.Stage,
 		Outcome:       req.Outcome,
-		Notes:         req.Notes, // will be enriched below
+		Notes:         req.Notes, // base notes coming from the popup
 		InterviewTime: interviewTime,
 	}
 
 	// --- 2) AI enrichment (best effort) -----------------------------------
-	// We call the LLM only if we have a non-empty description & position.
+
 	if req.Description != "" && req.Position != "" {
-		enriched, err := ai.EnrichJobWithLLM(req.Description, req.Position, req.Company)
+		ej, err := ai.EnrichJobWithLLM(req.Description, req.Position, req.Company)
 		if err != nil {
 			log.Printf("[/apply] AI enrichment failed: %v", err)
 		} else {
-			base := app.Notes
-			if strings.TrimSpace(base) == "" {
-				base = "Captured from LinkedIn"
+			var parts []string
+
+			if ej.Summary != "" {
+				parts = append(parts, "Summary:\n"+ej.Summary)
+			}
+			if len(ej.Skills) > 0 {
+				var bullets []string
+				for _, sk := range ej.Skills {
+					bullets = append(bullets, "- "+sk)
+				}
+				parts = append(parts, "Key skills:\n"+strings.Join(bullets, "\n"))
+			}
+			if ej.TailoredNote != "" {
+				parts = append(parts, "Note to self:\n"+ej.TailoredNote)
+			}
+			if ej.RawSnippet != "" {
+				parts = append(parts, "Description snippet:\n"+ej.RawSnippet)
 			}
 
-			app.Notes = base + "\n\n=== AI Summary & Talking Points ===\n" + enriched
+			if len(parts) > 0 {
+				if app.Notes != "" {
+					app.Notes += "\n\n"
+				}
+				app.Notes += "=== AI Summary & Talking Points ===\n" + strings.Join(parts, "\n\n")
+			}
 		}
 	}
 
-	// --- 3) Upsert in SQLite ----------------------------------------------
-
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+
+	// --- 3) Upsert in SQLite ----------------------------------------------
 
 	if err := s.store.UpsertJobAndApplication(ctx, &job, &app); err != nil {
 		log.Printf("[/apply] DB error in UpsertJobAndApplication: %v", err)
@@ -106,26 +127,30 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[/apply] DB upsert ok: job_id=%d application_id=%d", job.ID, app.ID)
 
-	// --- 4) Create row in Notion ------------------------------------------
+	// --- 4) Create row in Notion (best effort) -----------------------------
 
-	pageID, err := s.notion.CreateJobPage(ctx, job, app)
-	if err != nil {
-		log.Printf("[/apply] Notion error in CreateJobPage: %v", err)
-		http.Error(w, "notion error: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	log.Printf("[/apply] Notion page created: %s", pageID)
+	var pageID string
+	if s.notion != nil {
+		pid, err := s.notion.CreateJobPage(ctx, job, app)
+		if err != nil {
+			log.Printf("[/apply] Notion error in CreateJobPage: %v", err)
+		} else {
+			pageID = pid
+			log.Printf("[/apply] Notion page created: %s", pageID)
 
-	// Save Notion page id (best-effort)
-	if err := s.store.SaveNotionPageID(ctx, app.ID, pageID); err != nil {
-		log.Printf("[/apply] warning: SaveNotionPageID failed: %v", err)
+			if err := s.store.SaveNotionPageID(ctx, app.ID, pageID); err != nil {
+				log.Printf("[/apply] warning: SaveNotionPageID failed: %v", err)
+			}
+		}
 	}
 
 	resp := map[string]any{
 		"ok":             true,
 		"job_id":         job.ID,
 		"application_id": app.ID,
-		"notion_page_id": pageID,
+	}
+	if pageID != "" {
+		resp["notion_page_id"] = pageID
 	}
 
 	w.Header().Set("Content-Type", "application/json")

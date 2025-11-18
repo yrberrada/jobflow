@@ -4,21 +4,30 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
-// Simple chat request/response structs for OpenAI's /v1/chat/completions
-// (tested pattern; you may tweak model later).
-type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
+// What we want to get back from the LLM.
+type EnrichedJob struct {
+	Summary      string   `json:"summary"`
+	Skills       []string `json:"skills"`
+	TailoredNote string   `json:"tailored_note"`
+	RawSnippet   string   `json:"raw_snippet"`
 }
 
+// Minimal types to talk to /v1/chat/completions.
 type chatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+}
+
+type chatRequest struct {
+	Model    string        `json:"model"`
+	Messages []chatMessage `json:"messages"`
 }
 
 type chatResponse struct {
@@ -27,68 +36,95 @@ type chatResponse struct {
 	} `json:"choices"`
 }
 
-// EnrichJobWithLLM takes the raw job description and returns a cleaned,
-// enriched note string you can put into Notion ("Notes" column).
-func EnrichJobWithLLM(rawText, role, company string) (string, error) {
+// EnrichJobWithLLM calls OpenAI once and tries to turn the
+// job description into a structured EnrichedJob.
+func EnrichJobWithLLM(rawText, role, company string) (EnrichedJob, error) {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
-		// No API key? Just return the raw text so the rest still works.
-		return "⚠️ OPENAI_API_KEY not set – using raw description.\n\n" + rawText, nil
+		return EnrichedJob{}, fmt.Errorf("missing OPENAI_API_KEY")
 	}
 
-	systemPrompt := `You are a concise job-application assistant.
+	// 1) Build the prompt
+	prompt := fmt.Sprintf(`
+You are an AI assistant for job seekers.
 
-Given a job posting, you must:
+Summarize the job description and extract useful fields.
 
-1) Write a SHORT summary in 3–4 sentences (what the role is, team, impact).
-2) List 5–10 core skills or technologies in bullet points.
-3) Suggest 2–3 short, tailored talking points the candidate can reuse in cover letters or outreach.
+Return STRICT JSON only, with this exact shape:
 
-Return everything as **plain text**, no JSON, no markdown headings. Use bullets with a simple dash "-".`
+{
+  "summary": "3-6 sentence summary of the role",
+  "skills": ["skill1", "skill2", "..."],
+  "tailored_note": "short advice for this candidate (resume tweaks, strategy, etc.)",
+  "raw_snippet": "most important 250 characters from the job description"
+}
 
-	userPrompt := fmt.Sprintf(
-		"Company: %s\nRole: %s\n\nJob posting:\n%s",
-		company, role, rawText,
-	)
+Do NOT add any extra keys or text outside the JSON.
 
-	reqBody := chatRequest{
-		Model: "gpt-4.1-mini", // or gpt-4o-mini, gpt-3.5-turbo, etc.
+JOB TITLE: %s
+COMPANY: %s
+
+DESCRIPTION:
+%s
+`, role, company, rawText)
+
+	reqPayload := chatRequest{
+		// You can switch to "gpt-4.1-mini" or another model if you prefer.
+		Model: "gpt-4o-mini",
 		Messages: []chatMessage{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: userPrompt},
+			{Role: "user", Content: prompt},
 		},
 	}
 
-	b, err := json.Marshal(reqBody)
+	bodyBytes, err := json.Marshal(reqPayload)
 	if err != nil {
-		return "", fmt.Errorf("marshal chat request: %w", err)
+		return EnrichedJob{}, fmt.Errorf("marshal chat request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewReader(b))
+	// 2) Build HTTP request
+	httpReq, err := http.NewRequest(
+		http.MethodPost,
+		"https://api.openai.com/v1/chat/completions",
+		bytes.NewReader(bodyBytes),
+	)
 	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
+		return EnrichedJob{}, fmt.Errorf("create HTTP request: %w", err)
 	}
+
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 20 * time.Second}
-	resp, err := client.Do(httpReq)
+	// 3) Send it
+	client := &http.Client{Timeout: 15 * time.Second}
+	httpResp, err := client.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("call OpenAI: %w", err)
+		return EnrichedJob{}, fmt.Errorf("call OpenAI: %w", err)
 	}
-	defer resp.Body.Close()
+	defer httpResp.Body.Close()
 
-	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("OpenAI HTTP %d", resp.StatusCode)
-	}
-
-	var cr chatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		return "", fmt.Errorf("decode OpenAI response: %w", err)
-	}
-	if len(cr.Choices) == 0 {
-		return "", fmt.Errorf("no choices in OpenAI response")
+	if httpResp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(httpResp.Body)
+		return EnrichedJob{}, fmt.Errorf("OpenAI HTTP %d: %s", httpResp.StatusCode, strings.TrimSpace(string(b)))
 	}
 
-	return cr.Choices[0].Message.Content, nil
+	// 4) Decode the OpenAI chat response
+	var chatResp chatResponse
+	if err := json.NewDecoder(httpResp.Body).Decode(&chatResp); err != nil {
+		return EnrichedJob{}, fmt.Errorf("decode chat response: %w", err)
+	}
+
+	if len(chatResp.Choices) == 0 {
+		return EnrichedJob{}, fmt.Errorf("no choices returned from OpenAI")
+	}
+
+	rawContent := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+
+	// 5) Try to parse the model's JSON into our EnrichedJob struct
+	var ej EnrichedJob
+	if err := json.Unmarshal([]byte(rawContent), &ej); err != nil {
+		// Fallback: if the model didn't return valid JSON, just stuff the text into RawSnippet
+		ej.RawSnippet = rawContent
+	}
+
+	return ej, nil
 }

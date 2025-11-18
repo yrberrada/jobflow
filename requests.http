@@ -23,3 +23,40 @@ GET http://localhost:8081/debug/notion/search
 
 ### Notion ping
 GET http://localhost:8081/debug/notion
+
+
+###
+# curl -X POST http://localhost:8081/apply
+#  -H "Content-Type: application/json"
+#  -d '{
+#    "external_id": "manual-test",
+#    "position": "Data Scientist",
+#    "company": "TestCorp",
+#    "location": "Remote - US",
+#    "url": "https://example.com/job",
+#    "work_mode": "Remote",
+#    "salary": "$100k",
+#    "description": "This is a fake job description used to test Notion mapping.",
+#    "notes": "Sent from curl",
+#    "stage": "Applied",
+#    "outcome": "Active",
+#    "next_interview": ""
+#  }'
+POST http://localhost:8081/apply
+Content-Type: application/json
+
+{
+  "external_id": "manual-test",
+  "position": "Data Scientist",
+  "company": "TestCorp",
+  "location": "Remote - US",
+  "url": "https://example.com/job",
+  "work_mode": "Remote",
+  "salary": "$100k",
+  "notes": "Sent from curl",
+  "stage": "Applied",
+  "outcome": "Active",
+  "next_interview": ""
+}
+
+###

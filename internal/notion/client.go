@@ -1,3 +1,4 @@
+// internal/notion/client.go
 package notion
 
 import (
@@ -47,88 +48,87 @@ func (c *Client) SearchDatabases(ctx context.Context) ([]gnt.Database, error) {
 			dbs = append(dbs, db)
 		}
 	}
+
 	return dbs, nil
 }
 
-// rt builds a simple rich text array for Notion.
-func rt(content string) []gnt.RichText {
-	if content == "" {
-		return nil
-	}
-	return []gnt.RichText{
-		{
-			Text: &gnt.Text{
-				Content: content,
-			},
+// rt builds a valid Notion RichText node for plain text.
+func rt(text string) gnt.RichText {
+	return gnt.RichText{
+		Type: gnt.RichTextTypeText,
+		Text: &gnt.Text{
+			Content: text,
 		},
 	}
 }
 
-// buildJobPageProperties maps our domain.Job + Application → Notion DB properties.
 func buildJobPageProperties(job domain.Job, app domain.Application) gnt.DatabasePageProperties {
 	props := gnt.DatabasePageProperties{}
 
 	if job.Title != "" {
 		props["Position"] = gnt.DatabasePageProperty{
-			Title: rt(job.Title),
+			Title: []gnt.RichText{
+				rt(job.Title),
+			},
 		}
 	}
-
 	if job.Company != "" {
 		props["Company"] = gnt.DatabasePageProperty{
-			RichText: rt(job.Company),
+			RichText: []gnt.RichText{
+				rt(job.Company),
+			},
 		}
 	}
-
 	if job.URL != "" {
 		props["Job Posting"] = gnt.DatabasePageProperty{
 			URL: &job.URL,
 		}
 	}
-
 	if job.WorkMode != "" {
 		props["Work Mode"] = gnt.DatabasePageProperty{
 			Select: &gnt.SelectOptions{
-				Name: job.WorkMode, // e.g. "Remote", "Hybrid", ...
+				Name: job.WorkMode,
+			},
+		}
+	}
+	if job.Location != "" {
+		props["location"] = gnt.DatabasePageProperty{
+			RichText: []gnt.RichText{
+				rt(job.Location),
+			},
+		}
+	}
+	if job.Salary != "" {
+		props["Salary"] = gnt.DatabasePageProperty{
+			RichText: []gnt.RichText{
+				rt(job.Salary),
 			},
 		}
 	}
 
-	if job.Location != "" {
-		// Note your column is called `location` (lowercase).
-		props["location"] = gnt.DatabasePageProperty{
-			RichText: rt(job.Location),
-		}
-	}
-
-	if job.Salary != "" {
-		props["Salary"] = gnt.DatabasePageProperty{
-			RichText: rt(job.Salary),
-		}
-	}
+	// (No Description mapping here, since your DB has no "Description" property)
 
 	if app.Stage != "" {
 		props["Stage"] = gnt.DatabasePageProperty{
 			Select: &gnt.SelectOptions{
-				Name: app.Stage, // must match an existing Stage option
+				Name: app.Stage,
 			},
 		}
 	}
-
 	if app.Outcome != "" {
 		props["Outcome"] = gnt.DatabasePageProperty{
 			Select: &gnt.SelectOptions{
-				Name: app.Outcome, // must match an existing Outcome option
+				Name: app.Outcome,
 			},
 		}
 	}
-
 	if app.Notes != "" {
 		props["Notes"] = gnt.DatabasePageProperty{
-			RichText: rt(app.Notes),
+			RichText: []gnt.RichText{
+				rt(app.Notes),
+			},
 		}
 	}
-
 	if app.InterviewTime != nil {
 		dt := gnt.NewDateTime(*app.InterviewTime, true)
 		props["Next Interview"] = gnt.DatabasePageProperty{
@@ -141,7 +141,7 @@ func buildJobPageProperties(job domain.Job, app domain.Application) gnt.Database
 	return props
 }
 
-// CreateJobPage creates a new row in your Job Tracker (2.0) database.
+// CreateJobPage: create a new row in the Job Tracker DB.
 func (c *Client) CreateJobPage(ctx context.Context, job domain.Job, app domain.Application) (string, error) {
 	props := buildJobPageProperties(job, app)
 
